@@ -35,7 +35,11 @@ module FSUtils = struct
   let ls dn =
     let rec get_all acc dh =
       try
-        get_all ((Unix.readdir dh) :: acc) dh
+        get_all (match Unix.readdir dh with
+            | "." -> acc
+            | ".." -> acc
+            | s -> dn / s :: acc
+          ) dh
       with _ ->
         Unix.closedir dh;
         List.rev acc

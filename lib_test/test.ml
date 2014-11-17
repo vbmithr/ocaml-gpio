@@ -6,9 +6,8 @@ end
 
 module TestController = struct
   let get ctx =
-    assert_equal true (List.length @@ Controller.get () >= 0)
+    assert_equal true (List.length @@ Controller.get () == 1)
 end
-
 
 let suite =
   "Gpio">:::
