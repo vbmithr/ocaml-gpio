@@ -1,0 +1,8 @@
+version = "0.1"
+description = "Macrobenchmark tools"
+requires = ""
+archive(byte) = "gpio.cma"
+archive(byte, plugin) = "gpio.cma"
+archive(native) = "gpio.cmxa"
+archive(native, plugin) = "gpio.cmxs"
+exists_if = "gpio.cma"

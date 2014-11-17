@@ -1,0 +1,5 @@
+<**/*.{ml,mli}> : bin_annot, debug
+<lib> : include
+<lib_test> : include
+
+<lib_test/*.*> : package(oUnit)
