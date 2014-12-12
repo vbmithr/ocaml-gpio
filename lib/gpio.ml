@@ -33,18 +33,15 @@ module FSUtils = struct
   let (/) = Filename.concat
 
   let ls dn =
-    let rec get_all acc dh =
-      let%lwt acc = Lwt.try_bind
-          (fun () -> Lwt_unix.readdir dh)
-          (function
-          | "." -> return acc
-          | ".." -> return acc
-          | s -> return @@ dn / s :: acc)
-          (fun _ -> Lwt_unix.closedir dh >|= fun () -> List.rev acc)
-      in
-      get_all acc dh in
+    let rec get_all acc dh = Lwt.try_bind
+        (fun () -> Lwt_unix.readdir dh)
+        (function
+          | "."  -> get_all acc dh
+          | ".." -> get_all acc dh
+          | s    -> get_all (dn / s :: acc) dh)
+        (fun _ -> Lwt_unix.closedir dh >|= fun () -> List.rev acc) in
     match Sys.is_directory dn with
-    | true -> let%lwt dh = Lwt_unix.opendir dn in get_all [] dh
+    | true -> Lwt_unix.opendir dn >>= get_all []
     | false -> return []
     | exception _ -> return []
 

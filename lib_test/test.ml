@@ -45,8 +45,8 @@ let suite =
   "Gpio">:::
   [
     "Controller.get" >:: TestController.get;
-    "Controller.export_unexport" >:: TestController.export_unexport;
-    "GPIO.get_direction" >:: TestGPIO.get_direction;
+    (* "Controller.export_unexport" >:: TestController.export_unexport; *)
+    (* "GPIO.get_direction" >:: TestGPIO.get_direction; *)
 (*      "GPIO.get_value" >:: TestGPIO.get_value; *)
   ]
 
