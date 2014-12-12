@@ -1,8 +1,9 @@
+open Lwt
 open Printf
 
-let fail s = `Failure s
-
 module Opt = struct
+  let return v = Some v
+
   let run_exn = function
     | Some v -> v
     | None -> invalid_arg "run_exn"
@@ -20,13 +21,12 @@ module Opt = struct
     | None -> None
 end
 
-module List = struct
-  include List
+module Lwt_list = struct
+  include Lwt_list
   let filter_map f l =
-    List.rev @@
-    List.fold_left
-      (fun a e -> match f e with None -> a | Some res -> res::a)
-      [] l
+    Lwt_list.fold_left_s
+      (fun a e -> match%lwt f e with None -> return a | Some res -> return @@ res::a)
+      [] l >|= List.rev
 end
 
 module FSUtils = struct
@@ -34,77 +34,57 @@ module FSUtils = struct
 
   let ls dn =
     let rec get_all acc dh =
-      try
-        get_all (match Unix.readdir dh with
-            | "." -> acc
-            | ".." -> acc
-            | s -> dn / s :: acc
-          ) dh
-      with _ ->
-        Unix.closedir dh;
-        List.rev acc
-    in
+      let%lwt acc = Lwt.try_bind
+          (fun () -> Lwt_unix.readdir dh)
+          (function
+          | "." -> return acc
+          | ".." -> return acc
+          | s -> return @@ dn / s :: acc)
+          (fun _ -> Lwt_unix.closedir dh >|= fun () -> List.rev acc)
+      in
+      get_all acc dh in
     match Sys.is_directory dn with
-    | true ->
-      let dh = Unix.opendir dn in
-      get_all [] dh
-    | false -> []
-    | exception _ -> []
+    | true -> let%lwt dh = Lwt_unix.opendir dn in get_all [] dh
+    | false -> return []
+    | exception _ -> return []
 
-  let with_ic_safe fn f =
-    let ic = open_in fn in
-    try
-      let res = f ic in
-      close_in ic; res
-    with exn -> close_in ic; raise exn
+  let read_first_line fn =
+    Lwt_io.(with_file fn ~mode:Input (fun ic -> read_line_opt ic))
 
-  let read_file fn =
-    match Sys.file_exists fn with
-    | false -> None
-    | true ->
-      with_ic_safe fn
-        (fun ic ->
-           let ic_len = in_channel_length ic in
-           let buf = Bytes.create ic_len in
-           let nb_read = input ic buf 0 ic_len in
-           if nb_read <> ic_len then None
-           else Some buf
-        )
+  let write_string fn s =
+    Lwt_io.(with_file ~mode:Output fn (fun oc -> write oc s))
 
-  let with_fd_ro_safe fn f =
-    let open Unix in
-    let fd = openfile fn [O_RDONLY] 0o644 in
-    try
-      let res = f fd in close fd; res
-    with exn -> close fd; raise exn
+  let with_fd_ro_safe fn (f : Lwt_unix.file_descr -> 'a Lwt.t) : 'a Lwt.t =
+    let open Lwt_unix in
+    let%lwt fd = openfile fn [O_RDONLY] 0o644 in
+    try%lwt
+      let%lwt res = f fd in close fd >|= fun () -> res
+    with exn -> close fd >>= fun () -> fail exn
 
-  let with_fd_wo_safe fn f =
-    let open Unix in
-    let fd = openfile fn [O_WRONLY] 0o644 in
-    try
-      let res = f fd in close fd; res
-    with exn -> close fd; raise exn
+let with_fd_wo_safe fn f =
+  let open Lwt_unix in
+  let%lwt fd = openfile fn [O_WRONLY] 0o644 in
+  try%lwt
+    let%lwt res = f fd in close fd >|= fun () -> res
+  with exn -> close fd >>= fun () -> fail exn
 
-  let with_fd_rw_safe fn f =
-    let open Unix in
-    let fd = openfile fn [O_RDWR] 0o644 in
-    try
-      let res = f fd in close fd; res
-    with exn -> close fd; raise exn
-
-  let atomic_write fn s =
-    try
-      let nb_written = with_fd_wo_safe fn
-          (fun fd -> Unix.write fd s 0 @@ String.length s) in
-      nb_written = String.length s
-    with _ -> false
+let with_fd_rw_safe fn f =
+  let open Lwt_unix in
+  let%lwt fd = openfile fn [O_RDWR] 0o644 in
+  try%lwt
+    let%lwt res = f fd in close fd >|= fun () -> res
+  with exn -> close fd >>= fun () -> fail exn
 end
 
 module GPIO = struct
+  type direction = [`NA | `In | `Out]
+  type value = [`Low | `High]
+  type edge = [`NA | `None | `Rising | `Falling | `Both]
+
   type t = {
-    direction: [`Nonexistent | `In | `Out];
-    value: [`Low | `High];
-    edge: [`Nonexistent | `None | `Rising | `Falling | `Both];
+    direction: direction;
+    value: value;
+    edge: edge;
     active_low: bool;
   }
 
@@ -158,6 +138,9 @@ module GPIO = struct
   let active_low_fn id =
     "/sys/class/gpio/gpio" ^ string_of_int id ^ "/active_low"
 
+  let fail_unexported id =
+    fail @@ Failure (sprintf "GPIO %d not exported or nonexistent" id)
+
   let install id =
     let open FSUtils in
     let dn = gpio_dn id in
@@ -166,87 +149,73 @@ module GPIO = struct
       let value_fn = dn / "value" in
       let edge_fn = dn / "edge" in
       let active_low_fn = dn / "active_low" in
-      t.(id) <- Some {
-          direction = (read_file direction_fn |>
-                       function None -> `Nonexistent | Some v -> direction_of_string v);
-          value = Opt.(map value_of_string @@ read_file value_fn |> run_exn);
-          edge = (read_file edge_fn |>
-                  function None -> `Nonexistent | Some v -> edge_of_string v);
-          active_low = Opt.(map bool_of_string @@ read_file active_low_fn |> run_exn);
-      }; `Ok
-    else
-      begin
-        t.(id) <- None;
-        sprintf "GPIO %d not exported or nonexistent" id |> fail
-      end
+      let%lwt direction = Lwt.try_bind
+          (fun () -> read_first_line direction_fn)
+          (function Some v -> return @@ direction_of_string v | None -> return `NA)
+          (fun _ -> return `NA)
+      and value = read_first_line value_fn >>= function
+         | Some v -> return @@ value_of_string v
+         | None -> fail (Failure (value_fn  ^ " does not exist"))
+      and edge = Lwt.try_bind
+          (fun () -> read_first_line edge_fn)
+          (function Some v -> return @@ edge_of_string v | None -> return `NA)
+          (fun _ -> return `NA)
+      and active_low = read_first_line active_low_fn >>= function
+        | Some v -> return @@ bool_of_string v
+        | None -> fail (Failure (active_low_fn ^ " does not exist")) in
+      t.(id) <- Some { direction; value; edge; active_low; }; return_unit
+    else (t.(id) <- None; fail_unexported id)
 
-  let uninstall id = t.(id) <- None
+  let uninstall id = t.(id) <- None; return_unit
 
-  let get_direction id = Opt.map (fun t -> t.direction) t.(id)
-  let get_value id = Opt.map (fun t -> t.value) t.(id)
-  let get_edge id = Opt.map (fun t -> t.edge) t.(id)
-  let get_active_low id = Opt.map (fun t -> t.active_low) t.(id)
+  let get_direction id = match t.(id) with
+    | None -> fail_unexported id
+    | Some t -> return t.direction
 
-  let set_direction id d =
-    match t.(id) with
-    | None -> sprintf "GPIO %d is not exported" id |> fail
-    | Some { direction = `Nonexistent; _ } ->
-      sprintf "GPIO %d does not support changing direction" id |> fail
+  let get_value id = match t.(id) with
+    | None -> fail_unexported id
+    | Some t -> return t.value
+
+  let get_edge id = match t.(id) with
+    | None -> fail_unexported id
+    | Some t -> return t.edge
+
+  let get_active_low id = match t.(id) with
+    | None -> fail_unexported id
+    | Some t -> return t.active_low
+
+  let set_direction id d = match t.(id) with
+    | None -> fail_unexported id
+    | Some { direction = `NA; _ } ->
+      fail @@ Failure (sprintf "GPIO %d does not support changing direction" id)
     | Some _ ->
-      let written =
-        FSUtils.atomic_write (direction_fn id) (string_of_direction d) in
-      let reread = if written
-        then Opt.map direction_of_string @@ FSUtils.read_file (direction_fn id)
-        else None in
-      match reread with
-      | Some d' when d' = d -> `Ok
-      | _ -> sprintf "Failed changing direction of GPIO %d" id |> fail
+      FSUtils.write_string (direction_fn id) (string_of_direction d) <&>
+      FSUtils.with_fd_ro_safe (direction_fn id) Lwt_unix.wait_pollpri
 
-  let set_value id v =
-    match t.(id) with
+  let set_value id v = match t.(id) with
     | None ->
-      sprintf "GPIO %d is not exported" id |> fail
+      fail @@ Failure (sprintf "GPIO %d is not exported" id)
     | Some { direction = `In; _ } ->
-      sprintf "GPIO %d is an input pin" id |> fail
+      fail @@ Failure (sprintf "GPIO %d is an input pin" id)
     | Some _ ->
-      let written =
-        FSUtils.atomic_write (value_fn id) (string_of_value v) in
-      let reread = if written
-        then Opt.map value_of_string @@ FSUtils.read_file (value_fn id)
-        else None in
-      match reread with
-      | Some v' when v = v' -> `Ok
-      | _ -> sprintf "Failed changing direction of GPIO %d" id |> fail
+      FSUtils.write_string (value_fn id) (string_of_value v) <&>
+      FSUtils.with_fd_ro_safe (value_fn id) Lwt_unix.wait_pollpri
 
-  let set_edge id e =
-    match t.(id) with
+  let set_edge id e = match t.(id) with
     | None ->
-      sprintf "GPIO %d is not exported" id |> fail
-    | Some { edge = `Nonexistent; _ } ->
-      sprintf "GPIO %d does not support changing edge" id |> fail
+      fail @@ Failure (sprintf "GPIO %d is not exported" id)
+    | Some { edge = `NA; _ } ->
+      fail @@ Failure (sprintf "GPIO %d does not support changing edge" id)
     | Some _ ->
-      let written =
-        FSUtils.atomic_write (edge_fn id) (string_of_edge e) in
-      let reread = if written
-        then Opt.map edge_of_string @@ FSUtils.read_file (edge_fn id)
-        else None in
-      match reread with
-      | Some e' when e' = e -> `Ok
-      | _ -> sprintf "Failed changing direction of GPIO %d" id |> fail
+      FSUtils.write_string (edge_fn id) (string_of_edge e) <&>
+      FSUtils.with_fd_ro_safe (edge_fn id) Lwt_unix.wait_pollpri
 
-  let set_active_low id b =
-    match t.(id) with
+  let set_active_low id b = match t.(id) with
     | None ->
-      sprintf "GPIO %d is not exported" id |> fail
+      fail @@ Failure (sprintf "GPIO %d is not exported" id)
     | Some _ ->
-      let written =
-        FSUtils.atomic_write (active_low_fn id) (string_of_bool b) in
-      let reread = if written
-        then Opt.map bool_of_string @@ FSUtils.read_file (active_low_fn id)
-        else None in
-      match reread with
-      | Some _ -> `Ok
-      | None -> sprintf "Failed changing direction of GPIO %d" id |> fail
+      FSUtils.write_string (active_low_fn id) (string_of_bool b) <&>
+      FSUtils.with_fd_ro_safe (active_low_fn id) Lwt_unix.wait_pollpri
 end
 
 module Controller = struct
@@ -254,7 +223,13 @@ module Controller = struct
     base: int;
     label: string;
     ngpio: int;
+    inotify: Lwt_inotify.t;
+    mutable iwatches: Inotify.watch list;
   }
+
+  let base t = t.base
+  let label t = t.label
+  let ngpio t = t.ngpio
 
   let belongs t i = i >= t.base && i < t.ngpio
 
@@ -263,60 +238,58 @@ module Controller = struct
     let base_fn = dn / "base" in
     let label_fn = dn / "label" in
     let ngpio_fn = dn / "ngpio" in
-    match
-      read_file base_fn,
-      read_file label_fn,
-      read_file ngpio_fn
-    with
+    let%lwt base = read_first_line base_fn in
+    let%lwt label = read_first_line label_fn in
+    let%lwt ngpio_fn = read_first_line ngpio_fn in
+    match base, label, ngpio_fn with
     | Some base, Some label, Some ngpio ->
-      Some {
+      let%lwt inotify = Lwt_inotify.create () in
+      let%lwt iwatch = Lwt_inotify.add_watch inotify "/sys/class/gpio" [Inotify.S_Create] in
+      return @@ Some {
         base = int_of_string base;
         label;
         ngpio = int_of_string ngpio;
+        inotify;
+        iwatches = [iwatch]
       }
-    | _ -> None
+    | _ -> return None
 
   let get () =
     match Sys.is_directory "/sys/class/gpio" with
-    | true ->
-      List.filter_map of_dir @@ FSUtils.ls "/sys/class/gpio"
-    | false -> []
-    | exception _ -> []
+    | true -> FSUtils.ls "/sys/class/gpio" >>= Lwt_list.filter_map of_dir
+    | false -> return []
+    | exception _ -> return []
+
+  let get_first () = get () >|= List.hd
+
+  let rec wait_exported inotify id =
+    let id_str = "gpio" ^ string_of_int id in
+    match%lwt Lwt_inotify.read inotify with
+    | _, evtkinds, _, Some str when
+        str = id_str &&
+        List.mem Inotify.Create evtkinds -> return_unit
+    | _ -> wait_exported inotify id
+
+  let rec wait_unexported inotify id =
+    let id_str = "gpio" ^ string_of_int id in
+    match%lwt Lwt_inotify.read inotify with
+    | _, evtkinds, _, Some str when
+        str = id_str &&
+        List.mem Inotify.Delete evtkinds -> return_unit
+    | _ -> wait_unexported inotify id
 
   let export t id =
     if not @@ belongs t id
     then
-      sprintf "Impossible to export %d: should be in range [%d-%d["
-        id t.base t.ngpio |> fail
+      fail @@ Failure
+      (sprintf "Impossible to export %d: should be in range [%d-%d)"  id t.base t.ngpio)
     else
       let id_str = string_of_int id in
-      let id_str_len = String.length id_str in
-      try
-        FSUtils.with_fd_wo_safe "/sys/class/gpio/export"
-          (fun fd ->
-             if Unix.write fd id_str 0 id_str_len <> id_str_len
-             then sprintf "Failed to export GPIO %d: write_error" id |> fail
-             else GPIO.install id
-          )
-      with exn ->
-        sprintf "Failed to export %d: %s" id (Printexc.to_string exn) |>
-        fail
+      FSUtils.write_string "/sys/class/gpio/export" id_str >>= fun () ->
+      wait_exported t.inotify id >>= fun () -> GPIO.install id
 
   let unexport t id =
     let id_str = string_of_int id in
-    let id_str_len = String.length id_str in
-    try
-      FSUtils.with_fd_wo_safe "/sys/class/gpio/unexport"
-        (fun fd ->
-           let nb_written = Unix.write fd id_str 0 id_str_len in
-           if nb_written <> id_str_len
-           then
-             sprintf "Failed to unexport %d (Linux side): write_error" id |>
-             fail
-           else
-             (GPIO.uninstall id; `Ok)
-        )
-    with exn ->
-      sprintf "Failed to unexport %d (Linux side): %s"
-        id (Printexc.to_string exn) |> fail
+    FSUtils.write_string "/sys/class/gpio/unexport" id_str >>= fun () ->
+    wait_unexported t.inotify id >>= fun () -> GPIO.uninstall id
 end

@@ -1,5 +1,5 @@
 version = "0.1"
-description = "Macrobenchmark tools"
+description = "Manage Linux GPIOs in OCaml"
 requires = ""
 archive(byte) = "gpio.cma"
 archive(byte, plugin) = "gpio.cma"

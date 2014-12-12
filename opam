@@ -1,0 +1,9 @@
+opam-version: "1.2"
+name: "gpio"
+maintainer: "dev@domoco.fr"
+authors: ["Domoco Team"]
+homepage: "http://dev.domoco.fr/"
+build: [
+  [ "ocaml" "pkg/build.ml" "native=true" "native-dynlink=true" ]
+]
+depends: ["ocamlfind" {build}]

@@ -1,5 +1,7 @@
-<**/*.{ml,mli}> : bin_annot, debug
+true : bin_annot, debug, safe_string
+
 <lib> : include
 <lib_test> : include
 
-<lib_test/*.*> : package(oUnit)
+<lib/*.*>: package(lwt.unix), package(lwt.ppx), package(inotify.lwt)
+<lib_test/*.*> : package(lwt.unix), package(oUnit)
