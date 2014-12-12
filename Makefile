@@ -6,6 +6,7 @@ all: build
 
 build:
 	ocaml pkg/build.ml $(BUILDOPTS)
+	./test.native -shards 1 -runner sequential
 
 install: build
 	opam-installer --prefix=$(PREFIX) $(PKG).install
