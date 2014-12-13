@@ -3,5 +3,5 @@ true : bin_annot, debug, safe_string
 <lib> : include
 <lib_test> : include
 
-<lib/*.*>: package(lwt.unix), package(lwt.ppx)
-<lib_test/*.*> : package(lwt.unix), package(lwt.ppx), package(oUnit)
+<lib/*.*>: package(lwt.unix), package(lwt.ppx), package(ppx_deriving.std)
+<lib_test/*.*> : package(lwt.unix), package(lwt.ppx), package(ppx_deriving.std), package(oUnit)

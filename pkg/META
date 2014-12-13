@@ -1,6 +1,6 @@
 version = "0.1"
 description = "Manage Linux GPIOs in OCaml"
-requires = ""
+requires = "lwt.unix ppx_deriving.std"
 archive(byte) = "gpio.cma"
 archive(byte, plugin) = "gpio.cma"
 archive(native) = "gpio.cmxa"

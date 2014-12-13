@@ -4,9 +4,13 @@ BUILDOPTS=native=true native-dynlink=true
 
 all: build
 
+test: test.native
+	./test.native -shards 1 -runner sequential
+
+test.native: build
+
 build:
 	ocaml pkg/build.ml $(BUILDOPTS)
-	./test.native -shards 1 -runner sequential
 
 install: build
 	opam-installer --prefix=$(PREFIX) $(PKG).install

@@ -6,4 +6,4 @@ homepage: "http://dev.domoco.fr/"
 build: [
   [ "ocaml" "pkg/build.ml" "native=true" "native-dynlink=true" ]
 ]
-depends: ["ocamlfind" {build}]
+depends: ["ocamlfind" {build} "lwt" "ppx_deriving"]

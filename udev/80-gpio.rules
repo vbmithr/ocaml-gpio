@@ -1,0 +1,1 @@
+KERNEL=="gpio*", ACTION=="add", PROGRAM="/bin/sh -c 'chown -R vb:users /sys%p'"
