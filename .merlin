@@ -3,6 +3,9 @@ S lib
 S lib_test
 B _build/lib
 B _build/lib_test
+PKG containers.pervasives
+PKG gen
+PKG bitv
 PKG lwt.unix
 PKG lwt.ppx
 PKG ppx_deriving.std

@@ -3,5 +3,17 @@ true : bin_annot, debug, safe_string
 <lib> : include
 <lib_test> : include
 
-<lib/*.*>: package(lwt.unix), package(lwt.ppx), package(ppx_deriving.std)
-<lib_test/*.*> : package(lwt.unix), package(lwt.ppx), package(ppx_deriving.std), package(oUnit)
+<lib/*.*>: package(containers), \
+	   package(containers.pervasives), \
+	   package(containers.io), \
+	   package(gen), \
+	   package(bitv), \
+	   package(ppx_deriving.std)
+
+<lib_test/*.*> : package(containers), \
+	         package(containers.pervasives), \
+	         package(containers.io), \
+	         package(gen), \
+		 package(bitv), \
+		 package(ppx_deriving.std), \
+		 package(oUnit)
