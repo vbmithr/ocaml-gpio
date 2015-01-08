@@ -1,8 +1,12 @@
 opam-version: "1.2"
 name: "gpio"
-maintainer: "dev@domoco.fr"
-authors: ["Domoco Team"]
-homepage: "http://dev.domoco.fr/"
+version: "0.1"
+maintainer: "vb@luminar.eu.org"
+authors: ["Vincent Bernardoff <vb@luminar.eu.org>"]
+license: "ISC"
+homepage: "http://www.github.com/vbmithr/ocaml-gpio"
+bug-reports: "http://github.com/vbmithr/ocaml-gpio/issues"
+dev-repo: "git://github.com/vbmithr/ocaml-gpio"
 build: [
   [ "ocaml" "pkg/build.ml" "native=true" "native-dynlink=true" ]
 ]
